@@ -138,6 +138,7 @@ proc packer::main {argc argv} {
                 set label $k
                 set cmd $v
                 set forever false
+                set cmd_args {}
 
                 if {[string match *.* $k]} {
                     set keys [split $k \.] 
@@ -148,9 +149,7 @@ proc packer::main {argc argv} {
                 }
 
                 lappend cmds [dict create label $label cmd $cmd forever $forever]
-            }
-
-            set labels {}
+            }            
 
             foreach it $cmds {
 
@@ -158,23 +157,32 @@ proc packer::main {argc argv} {
                 set cmd [dict get $it cmd] 
                 set forever [dict get $it forever]
 
-                lappend labels $label
+                set idx [lsearch $argv --]
+                set user_cmd_label [join $argv " "]
+                set user_cmd_args {}
 
-                if {$label == [join $argv " "]} {
+                if {$idx > -1} {
+                    set user_cmd [lrange $argv 0 $idx-1]
+                    set user_cmd_label [join $user_cmd " "]
+                    set user_cmd_args [lrange $argv $idx+1 end]
+                }
 
-                    puts "::> run $label -> $cmd \{forever=$forever\}"
+                if {$label == $user_cmd_label} {
+
+                    puts "::> run \{forever=$forever\}: $label -> $cmd $user_cmd_args"
 
                     if {$forever} {
-                        run $cmd
+                        run [list {*}$cmd {*}$user_cmd_args]
                     } else {
-                        exec {*}[list {*}$cmd | tee /dev/tty]
+                        exec {*}[list {*}$cmd {*}$user_cmd_args | tee /dev/tty]
                     }
                     return
                 }                
             }
 
-            set labels [join $labels { | }]
-            puts "::> usage \[init | build | clean | test | $labels\]"
+            set labels [lmap it $cmds {dict get $it label}]
+            puts "::> usage \[init | build | clean | test | [join $labels { | }]\]"
+            puts "::> use -- to pass cmd args"
             exit 1
         }
     }

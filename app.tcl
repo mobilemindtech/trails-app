@@ -1,4 +1,4 @@
-#!/bin/tclsh
+#!/usr/bin/env tclsh
 
 source ./.tcl/deps.tcl
 

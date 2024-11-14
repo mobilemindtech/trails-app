@@ -9,20 +9,30 @@ namespace import ::trails::controllers::Controller
 namespace eval controllers  {
 	catch {
 		oo::class create DummyController { 
-			superclass Controller
+			
+			Controller {
+				scaffold true
+				route-path /mypath
+				route-prefix /v2
+				allowed-method {
+					index get
+				}
+				filters {
+					index {Auth enter *}
+				}
+			}
 
 			variable counter
 		}
 	}
 
 	oo::define DummyController {
-		constructor {args} {	
-			next	
-			my variable service scaffold filters counter
-			set service [DummyService new]	
-			set scaffold true
-
-			set counter 0
+		constructor {} {	
+			#next	
+			#my variable service scaffold filters counter
+			#set service [DummyService new]	
+			#set scaffold true
+			#set counter 0
 		}
 		
 		#method enter {request} {

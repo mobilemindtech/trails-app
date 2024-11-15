@@ -8,14 +8,14 @@ namespace import ::trails::services::Service
 
 namespace eval ::services  {
 	catch {
-		oo::class create DummyService { 
+		oo::class create IndexService { 
 			superclass Service 
 		}
 	}
 
-	namespace export DummyService
+	namespace export IndexService
 	
-	oo::define DummyService {
+	oo::define IndexService {
 		constructor {} {
 			next
 			my variable domain
@@ -29,6 +29,11 @@ namespace eval ::services  {
 			}
 
 		}
+		method foo {} { 
+			return foo
+		}
 	}
 
+
+	namespace export IndexService
 }

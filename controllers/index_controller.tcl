@@ -1,38 +1,29 @@
 package require TclOO
 
-source ./services/dummy_service.tcl
 source $::env(TRAILS_HOME)/controllers/controller.tcl
 
-namespace import ::services::DummyService
 namespace import ::trails::controllers::Controller
 
 namespace eval controllers  {
 	catch {
-		oo::class create DummyController { 
+		oo::class create IndexController { 
 			
 			Controller {
 				scaffold true
-				route-path /mypath
-				route-prefix /v2
-				allowed-method {
-					index get
-				}
-				filters {
-					index {Auth enter *}
-				}
 			}
 
 			variable counter
 		}
 	}
 
-	oo::define DummyController {
+	oo::define IndexController {
 		constructor {} {	
 			#next	
 			#my variable service scaffold filters counter
 			#set service [DummyService new]	
 			#set scaffold true
-			#set counter 0
+			set counter 0
+			puts "::? New IndexController"
 		}
 		
 		#method enter {request} {
@@ -40,10 +31,10 @@ namespace eval controllers  {
 		#	return $request
 		#}
 
-		#method leave {request response} {
-		#	$response prop body "[$response prop body], world!"
-		#	return $response
-		#}
+		method leave {request response} {
+			$response prop body "[$response prop body], world!"
+			return $response
+		}
 
 		#method recover {request err} {
 		#	my render -body $err
@@ -59,9 +50,10 @@ namespace eval controllers  {
 			my render -text "counter = $counter"
 		}
 
-		method index {request} {
-			Response new -status 200 -body {index override}
-		}
+		#method index {request} {
+		#	my variable indexService
+		#	Response new -status 200 -body [$indexService foo]
+		#}
 
 		method custom {request} {
 			Response new -status 200 -body {custom action}
@@ -112,7 +104,7 @@ namespace eval controllers  {
 	}
 
 
-	namespace export DummyController
+	namespace export IndexController
 }
 
 

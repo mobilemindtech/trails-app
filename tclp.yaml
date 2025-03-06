@@ -7,7 +7,6 @@ app:
   testdir: ./tests
 
 dependencies:
-  - https://github.com/mobilemindtec/tcl-simple-templater.git
   - https://github.com/mobilemindtec/trails.git
 
 requirements:

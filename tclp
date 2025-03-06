@@ -1,0 +1,1041 @@
+#!/usr/bin/env tclsh
+
+package require yaml
+package require http
+package require tls
+#package require Tclx
+
+#set cntrlc_flag 1
+
+http::register https 443 [list ::tls::socket -autoservername true]
+
+
+namespace eval tclp {
+    variable configs  
+    variable config_file_name
+    variable local_pgks_path 
+    set local_pgks_path ./.tcl
+    set config_file_name tclp.yaml 
+    #signal trap SIGINT tclp::trap_ctrl_c
+}
+
+proc tclp::git {args} {
+    debug "exec git $args"
+    catch {eval exec git $args} result options    
+    if {[dict get $options -errorcode] ne "NONE"} {                
+	   return -code error $result 
+       #[dict get $options -errorinfo]
+    }
+}
+
+proc tclp::get {d args} {
+    if {[dict exists $d {*}$args]} {
+        dict get $d {*}$args
+    } else {
+        return {}
+    }
+} 
+
+proc tclp::getdef {d args} {
+    set def [lindex $args end]
+    set params [lrange $args 0 end-1]
+    if {[dict exists $d {*}$params]} {
+        dict get $d {*}$params
+    } else {
+        return $def
+    }
+} 
+
+
+proc tclp::trap_ctrl_c {} {
+    debug "Aborting current routine"
+    stop_all
+    exit 0
+}
+
+ proc tclp::uniqkey { } {
+    set key   [ expr { pow(2,31) + [ clock clicks ] } ]
+    set key   [ string range $key end-8 end-3 ]
+    set key   [ clock seconds ]$key
+    return $key
+ }
+
+ proc tclp::sleep { ms } {
+    set uniq [ uniqkey ]
+    set ::__sleep__tmp__$uniq 0
+    after $ms set ::__sleep__tmp__$uniq 1
+    vwait ::__sleep__tmp__$uniq
+    unset ::__sleep__tmp__$uniq
+ }
+
+#
+# clear console
+#
+proc tclp::clear_term { } {
+    puts "\x1B\x5B\x32\x4A\x1B\x5B\x30\x3B\x30\x48"
+}
+
+#
+# get files checksum
+#
+proc tclp::get_checksum {} {
+    set dir ./
+    set filter *.tcl
+    set working_path [pwd]
+    set cmd [list find -L $working_path/$dir -type f -name $filter -exec md5sum \{\} \;]
+    exec {*}$cmd
+}
+
+#
+# run app entrypoint, restart on change
+#
+proc tclp::run {cmd} {
+    set chsum1 ""
+    set fd ""
+    set pid "" 
+
+    while {true} {
+        set chsum2 [get_checksum]
+        if {$chsum1 ne $chsum2} {
+            clear_term
+            debug "file changeg, restarting app.."
+            set chsum1 $chsum2
+
+            kill $pid
+
+            set pid [exec {*}$cmd &]
+            debug "app started!"
+            sleep 1000
+        }
+    }    
+}
+
+proc tclp::upgrade {} {
+
+    if {![file writable $::argv0]} {
+        debug "insufficient permission to write to $::argv0"
+        exit -1        
+    }
+
+    set url https://raw.githubusercontent.com/mobilemindtech/tclp/master/tclp
+    set data [file_download $url]
+    try {
+        set fd [open $::argv0 w+]
+        puts $fd $data
+        close $fd
+        debug "tclp upgraded to last version!"
+    } on error err {
+        debug "upgrade failed: $err"
+    }
+}
+
+proc tclp::package_install {pkg_url pkg_name} {
+    # get install path from $::auto_path
+    set lib_path [info library]
+    set tm_path ""
+
+    foreach it [::tcl::tm::path list] {
+	if {[file exists $it]} {
+	    set tm_path $it
+	}
+    }
+
+    if { ![file writable $lib_path]} {
+    	debug "insufficient permission to write to folder $lib_path"
+    	#debug "Ensure you have permission to write at the target location."
+    	exit -1
+    }
+    
+    debug "The lib will be installed in $lib_path and tm files in $tm_path"
+    read_line "Can you confirm? (y/n): "
+
+    if {[gets stdin] != "y"} {
+    	debug "cancelled"
+    	exit -1
+    }
+
+    if {$pkg_name == ""} {
+    	set pkg_name [lindex [split $pkg_url /] end]
+    	set pkg_name [lindex [split $pkg_name .] 0]
+    }
+
+    if {$pkg_name == ""} {
+    	debug "unable to determine package name"
+    	exit -1
+    }
+
+    debug "install pgk $pkg_name"
+
+    
+    set tmp /tmp/.tclp
+
+    if {[file exists $tmp] } {
+	file delete -force $tmp
+    }
+
+    file mkdir $tmp/pkgs
+
+    set result [download_pkg_from_git $pkg_url $tmp]
+    set deps [dict get $result deps]
+    set pkg [dict get $result pkg]
+    set deps [list $pkg {*}$deps]
+    foreach pkg $deps {
+
+	if {$pkg == ""} { continue }
+	
+        set pkg_name [dict get $pkg pkg_name]
+        set pkg_dir [get $pkg pkg_dir]
+	set pkg_tm_file_name [get $pkg tm_file_name]
+	set pkg_tm_file_path [get $pkg tm_file_path]
+	set pkg_tm_dir [get $pkg tm_dir]
+        set pkg_path $lib_path/$pkg_name
+
+	if {$pkg_tm_file_path != ""} {
+	    # has tm file
+
+	    if {$tm_path == ""} {
+		return -code error "tm path not found"
+	    }
+
+	    set pkg_tm_dest $tm_path/$pkg_tm_dir
+	    
+	    if {[file exists $pkg_tm_dest]} {
+		file delete -force $pkg_tm_dest
+	    }
+
+	    file mkdir $pkg_tm_dest
+	    file rename $pkg_tm_file_path  $pkg_tm_dest/$pkg_tm_file_name
+
+	    debug "\[ok\] pkg $pkg_tm_file_name installed successfully in $pkg_tm_dest/$pkg_tm_file_name"
+	    
+	} else {
+	    file rename $pkg_dir $pkg_path
+	    debug "\[ok\] pkg $pkg_dir installed successfully in $pkg_path"
+	}
+    }
+}
+
+proc tclp::package_list {} {
+    foreach it [glob -directory [info library] *] {
+	puts $it
+    }
+}
+
+#
+# kill app by PID
+#
+proc tclp::kill {pid} {
+    if {$pid != ""} {
+        puts "kill $pid"
+        exec {*}[list kill $pid]
+        debug "app stoped!"
+        sleep 300
+    }    
+}
+
+# https://wuhrr.wordpress.com/2011/04/01/tcltest-part-3-include-and-exclude-tests/
+proc tclp::test {argc argv} {
+
+    variable configs
+    
+    set params ""
+
+    if {$argc > 1} {
+
+        if {[lindex $argv 1] == "--help"} {
+            debug "Test usage:"
+            debug "configure -file patternList"
+            debug "configure -notfile patternList"
+            debug "configure -match patternList"
+            debug "configure -skip patternList"
+            debug "matchFiles patternList = shortcut for configure -file"
+            debug "skipFiles patternList = shortcut for configure -notfile"
+            debug "match patternList = shortcut for configure -match"
+            debug "skip patternList = shortcut for configure -skip"
+            debug "See more at https://wiki.tcl-lang.org/page/tcltest"
+            return
+        }
+
+        set params [lrange $argv 1 end]
+    }
+
+    
+    set testdir [getdef $configs app testdir tests]
+
+    set cmd [list sh -c "tclsh $testdir/all.tcl -testdir $testdir $params | tee /dev/tty"]
+    exec {*}$cmd
+}
+
+#
+#
+proc tclp::init {argc argv} {
+
+    init_empty_project
+
+	#set with_seed_index [lsearch $argv "--seed"]
+	#if {$with_seed_index > -1} {
+	#	init_with_seed $argv $with_seed_index
+	#} else {
+	#	init_empty_project
+	#}
+}
+
+# init empty build.yaml
+proc tclp::init_empty_project {} {
+    variable config_file_name
+    if {[file exists $config_file_name]} {
+        debug "$config_file_name already exists"
+    } else {
+
+        set fd [open $config_file_name w+]
+	foreach it $::templates::build_file {
+	    puts $fd $it
+	}
+        close $fd
+        debug "$config_file_name created!"
+    }	
+}
+
+proc tclp::init_with_seed {argv seed_index} {
+    set idx [expr {$seed_index + 1}]
+
+    if {$idx >= [llength $argv]} {
+	return -code error {seed url required}
+    }
+
+    set seed_url [lindex $argv $idx]
+    set pname [lindex [split $seed_url /] end]
+    set pname [lindex [split $pname .] 0]
+
+    if { [catch {git clone $seed_url $pname} err] } {
+	return -code error "clone error: $err"
+    }
+
+    foreach f [glob -nocomplain -directory $from *] {
+	if {$f == ".git"} { continue }
+	file copy -force $pname/$f [pwd]/$f
+    }
+
+    file delete -force ./$pname
+
+    debug {project initialized successfully}
+}
+
+#
+# read app configs
+#
+proc tclp::read_configs {} {
+    variable config_file_name
+    set build_file $config_file_name
+    set configs {}
+    if {[has_configs]} {        
+        return [read_config_file $build_file]      
+    }
+    return {}
+}
+
+proc tclp::read_config_file {fpath} {
+    set fd [open $fpath]
+    set contents [yaml::yaml2dict [read $fd]]
+    close $fd  
+    return $contents      
+}
+
+proc tclp::has_configs {} {
+    variable config_file_name
+    file exists ./$config_file_name
+}
+
+# run on install cmd option
+proc tclp::build {} {
+    variable local_pgks_path
+    variable configs
+
+    build_pkg $configs "" $local_pgks_path
+
+    debug "install done"
+}
+
+#
+# run build
+#
+proc tclp::build_pkg {pkg_configs pkg_dir dest} {
+
+    variable local_pgks_path
+    set name [dict get $pkg_configs app name]
+    set dependencies [get $pkg_configs dependencies]
+    set require_packages [get $pkg_configs requirements packages]
+    set require_cmds [get $pkg_configs requirements cmds]
+
+    debug "Install dependencies for $name"
+    
+    debug "check packages requirements for $name"
+    foreach pack $require_packages {        
+        if {[catch {package require $pack} err]} {
+            debug "\[x\] package $pack not found"
+            return
+        } else {
+            debug "\[ok\] package $pack found"
+        }
+    }
+
+    debug "check cmds requirements for $name"
+    foreach cmd $require_cmds {        
+        if {[catch {exec {*}[list sh -c $cmd]} err]} {
+            debug "\[x\] command $cmd not found"
+            return
+        } else {
+            debug "\[ok\] command $cmd found"
+        }
+    }
+
+    set results {}
+
+    foreach dep $dependencies {
+
+        if {[string match https://* $dep]} {
+            set result [download_pkg_from_git $dep $dest]
+
+	    if {$result == ""} { continue }
+	    
+	    set deps [dict get $result deps]
+	    set pkg [dict get $result pkg]
+	    set results [list {*}$results $pkg {*}$deps]
+        } else {
+            # here dependency config
+            if {[dict exists $pkg_configs $dep]} {
+
+		set results [list {*}$results \
+				 {*}[build_pkg_dep $pkg_configs $dep $dest]]
+		
+            } else {
+                return -code error "dependency build $dep not found"
+            }
+        }
+    }
+
+    set res [run_pkg_cmds $name  $pkg_configs $pkg_dir $dest]
+    list {*}$results {*}$res
+}
+
+# process build block from configs
+# @param pkg_name
+# @param pkg_configs
+# @param pkg_dir run command into this dir
+# @param dest
+proc tclp::run_pkg_cmds {pkg_name pkg_configs pkg_dir dest} {
+    set results {}
+    set build_info [get $pkg_configs build]
+    set cmds [get $build_info cmds]
+    set libdir [get $build_info libdir]
+    set tm_file [get $build_info tm file]
+    set tm_dir [get $build_info tm dir]
+    set url [get $build_info url]
+    #set pkg_name [get $build_info name]
+
+    if {$url != ""} {
+    	# build wrap here
+
+    	set result [download_pkg_from_git $url $dest]
+
+    	if {$result == ""} {
+    	    return ""
+    	}
+    	
+    	set pkg [dict get $result pkg]
+    	#set pkg_deps [dict get $result deps]
+    	#set pkg_name [dict get $pkg pkg_name]
+    	set pkg_dir [dict get $pkg pkg_dir]
+    }
+
+    if {[llength $cmds] > 0} {
+
+	foreach cmd $cmds { 
+	    debug "run $cmd"
+	    set cmd [list sh -c "cd $pkg_dir && $cmd"]
+	    set execution [catch {exec {*}$cmd} result options]
+        if {[dict get $options -errorcode] ne "NONE"} {
+    		puts $result
+    		return -code error "can't run cmd $cmd"
+        }
+	}
+
+	if {$libdir != ""} {
+	    lappend results [dict create \
+				            pkg_dir $libdir \
+				            pkg_name $pkg_name]
+	    set pkg_dest $dest/pkgs/$pkg_name
+	    if {[file exists $pkg_dest]} {
+		  file delete -force $pkg_dest
+	    }
+        
+	    file rename $pkg_dir/$libdir $pkg_dest
+        
+	} elseif {$tm_file != ""} {
+	    set tm_name [lindex [split $tm_file /] end]
+	    set tm_dest $dest/pkgs/$tm_dir
+	    if {[file exists $tm_dest]} {
+		file delete -force $tm_dest
+	    }
+	    file mkdir $tm_dest
+	    file rename $pkg_dir/$tm_file $tm_dest/$tm_name
+	    file delete -force $pkg_dir
+	    lappend results [dict create \
+				 pkg_name $pkg_name \
+				 tm_dir $tm_dir \
+				 tm_file_path $tm_dest/$tm_name \
+				 tm_file_name $tm_name]
+	} else {
+	    return -code error "build should be set libdir or tm.file"
+	}
+    }
+
+    return $results
+}
+
+# build package dependency when dep has build information
+# @param pkg_configs yaml config 
+# @param dep dependency name
+# @param dest destination folder build
+# @param force true to delete if exists or else skip build
+proc tclp::build_pkg_dep {pkg_configs dep dest} {
+    set results {}
+    set dep_info [dict get $pkg_configs $dep]
+    set build_info [get $dep_info build]
+    set url [dict get $dep_info url]
+    set cmds [get $build_info cmds]
+    set name [get $build_info name]
+    set pkg_name [get_url_pkg_name $url]
+    set libdir [get $build_info libdir]
+    set tm_file [get $build_info tm file]
+    set tm_dir [get $build_info tm dir]
+    set pkg_dir $dest/$pkg_name
+    
+    if {[file exists $pkg_dir]} {
+	debug "pkg $pkg_name already exists"
+	return ""
+    }
+
+    set result [download_pkg_from_git $url $dest]
+
+    if {$result == ""} {
+	return ""
+    }
+    
+    set pkg [dict get $result pkg]
+    set pkg_deps [dict get $result deps]
+    set pkg_name [dict get $pkg pkg_name]
+    set pkg_dir [dict get $pkg pkg_dir]
+
+    foreach pkg_dep $pkg_deps {
+	lappend results $pkg_dep
+    }
+
+    foreach cmd $cmds { 
+	debug "run $cmd"
+	set cmd [list sh -c "cd $pkg_dir && $cmd"]
+	set execution [catch {exec {*}$cmd} result options]
+    if {[dict get $options -errorcode] ne "NONE"} {
+	    puts $result
+	    return -code error "can't run cmd $cmd"        
+    }
+    }
+
+    if {$tm_file != ""} {
+	set tm_dest $dest/pkgs/$tm_dir
+	if {![file exists $tm_dest]} {
+	    file mkdir $tm_dest
+	}
+
+	file rename $pkg_dir/$tm_file  $tm_dest
+	file delete -force $pkg_dir
+
+	lappend results [dict create \
+			     pkg_name $pkg_name \
+			     tm_dir $tm_dir \
+			     tm_file_path $tm_dest \
+			     tm_file_name [lindex [split $tm_file /] end]]
+    } else {
+
+	if {$name != ""} {
+	    set pkg_name $name
+	}
+	
+	if {$libdir != ""} {		    
+	    file rename  $pkg_dir/$libdir $dest/$pkg_name
+	    file delete -force $pkg_dir
+	    set pkg_dir $dest/$pkg_name
+	}
+
+	lappend results [dict create \
+			     pkg_dir $pkg_dir \
+			     pkg_name $pkg_name]
+    }
+
+    return $results
+}
+
+#
+# get dir name by url
+#
+proc tclp::get_url_pkg_name {url} {
+    set dirname [lindex [split $url /] end]
+    lindex [split $dirname .] end-1    
+}
+
+#
+# run git clone dependency and run build if has tclp.yaml
+#
+proc tclp::download_pkg_from_git {url dest} {
+
+    variable config_file_name
+    variable local_pgks_path
+
+    # url folder name
+    set pkg_name [get_url_pkg_name $url]
+    set pkg_dir $dest/$pkg_name
+    
+    if {[file exists $pkg_dir]} {
+	debug "pkg $pkg_name already downloaded"
+	return {}
+    }
+
+    if {[catch {git clone $url $pkg_dir} err]} {
+	return -code error "clone error: $err"
+    }
+    
+    set results {}
+    set create_pkg true
+    
+    if {[file exists $pkg_dir/$config_file_name]} {
+        set pkg_configs [read_config_file $pkg_dir/$config_file_name]
+        set pname [get $pkg_configs app name]
+
+	# change folder name if package name != url folder name
+        puts "::> $pname, $pkg_name"
+        if {"$pname" != "$pkg_name"} {
+            set pkg_name $pname
+            set new_pkg_dir [file dirname $pkg_dir]
+            set new_pkg_dir $new_pkg_dir/$pkg_name
+
+	    if {[file exists $new_pkg_dir]} {
+		debug "pkg $pkg_name already downloaded"
+		file delete -force $pkg_dir
+		return ""
+	    }
+	    
+            file rename $pkg_dir $new_pkg_dir
+	    set pkg_dir $new_pkg_dir
+        }
+
+	if {[llength [get $pkg_configs build cmds]] > 0} {
+	    # not create package, because the package info
+	    # is created on build_pkg
+	    set create_pkg false
+	}
+	
+        set results [build_pkg $pkg_configs $pkg_dir $dest]
+    }
+
+    if {$create_pkg} {
+	set pkg [dict create \
+		     pkg_dir $pkg_dir \
+		     pkg_name $pkg_name]
+    } else {
+	set pkg ""
+    }
+	
+    dict create pkg $pkg deps $results
+}
+
+#
+# run download dependency file
+#
+proc tclp::file_download {url} {
+    debug "downloading file $url.."
+    set token [http::geturl $url]
+    set data [::http::data $token]
+    ::http::cleanup $token
+    return $data
+}
+
+#
+# write import on deps.tcl
+#
+proc tclp::create_deps_file {} {
+    variable local_pgks_path
+    if {![file exists deps.tcl]} {
+	set fd [open deps.tcl w]
+	puts $fd "#"
+	puts $fd "# this file was generated by tclp"
+	puts $fd "# do not modify, it may be removed or changed at any time"
+	puts $fd "#"
+	puts $fd "::tcl::tm::path add \[file normalize $local_pgks_path/pkgs\]"
+	puts $fd "lappend ::auto_path \[file normalize $local_pgks_path\]"
+	close $fd    
+    }
+}
+
+#
+# create deps dir
+#
+proc tclp::create_local_pgks_path {} {
+    variable local_pgks_path
+    if {![file exists $local_pgks_path]} {
+        file mkdir $local_pgks_path/pkgs
+    }
+    create_deps_file
+}
+
+proc tclp::is_dict d {
+    expr {[string is list $d]
+        && !([llength $d] % 2)
+        && ((2 * [llength [dict keys $d]]) == [llength $d])
+    }
+}
+
+proc tclp::read_line msg {
+    puts -nonewline "$msg "
+    flush stdout
+}
+
+proc tclp::debug msg {
+    puts ":: tclp> $msg"
+}
+
+proc tclp::create_pkg {pkg_name} {
+
+    variable config_file_name
+    if {[file exists $pkg_name]} {
+        debug "folder $pkg_name already exists"
+        exit -1
+    }
+
+    file mkdir $pkg_name
+    file mkdir $pkg_name/tests
+
+
+    create_file_with $pkg_name $pkg_name/pkgIndex.tcl [dict get $::templates::lib pkg-index] 
+    create_file_with $pkg_name $pkg_name/lib.tcl [dict get $::templates::lib lib]
+    create_file_with $pkg_name $pkg_name/tests/all.tcl [dict get $::templates::lib tests all]
+    create_file_with $pkg_name $pkg_name/tests/lib.test [dict get $::templates::lib tests lib]
+
+    
+    set build_contents [regsub -all -line {entrypoint} $::templates::build_file {#entrypoint}]    
+    create_file_with $pkg_name $pkg_name/$config_file_name [join $build_contents \n]
+}
+
+proc tclp::create_app {app_name} {
+
+    variable config_file_name
+
+    if {[file exists $app_name]} {
+        debug "folder $app_name already exists"
+        exit -1
+    }
+
+    file mkdir $app_name
+    file mkdir $app_name/tests
+
+    
+    create_file_with $app_name $app_name/main.tcl [dict get $::templates::app main]
+    create_file_with $app_name $app_name/tests/all.tcl [dict get $::templates::lib tests all]
+    create_file_with $app_name $app_name/tests/main.test [dict get $::templates::app test]
+
+    
+    create_file_with $app_name $app_name/$config_file_name [join [dict get $::templates::build_file] \n]
+}
+
+proc tclp::create_file_with {pkg_name file_name contents} {
+    set fd [open $file_name w+]
+    puts $fd [regsub -all -line {__app_name__} $contents $pkg_name]
+    close $fd
+}
+
+#
+# process app args
+#
+proc tclp::main {argc argv} {
+    
+    variable local_pgks_path
+    variable config_file_name 
+    variable configs    
+
+    set param ""
+
+    if {$argc > 0} {
+        set param [lindex $argv 0]
+    }
+
+
+    set configs [read_configs]
+
+    if {[has_configs]} {
+	create_local_pgks_path
+    }
+
+    switch $param {
+        init {
+            init $argc $argv
+        }
+        install {
+            set configs [read_configs]
+            build
+        }
+        clean {
+            if {[file exists $local_pgks_path]} {
+                file delete -force -- $local_pgks_path
+            }
+	    if {[file exists deps.tcl]} {
+		file delete deps.tcl
+	    }
+	    debug "cleaned!"
+        }
+        run {
+            run [dict get $configs app entrypoint]            
+        }
+        test {
+            test $argc $argv
+        }
+        upgrade {
+            upgrade            
+        }
+        pkg {
+
+	    foreach {_ cmd url pkg_name} $argv {
+		switch $cmd {
+		    list {
+			package_list
+		    }
+		    install {
+			if {$url == ""} {
+			    debug {package url is required}
+			    exit -1
+			}
+			package_install $url $pkg_name 
+		    }
+		    default {
+			debug "invalid command"
+		    }
+		}
+	    }
+        }
+        new {
+            foreach {_ type name} $argv {
+
+                if {$type == ""} {
+                    debug "$type is required. use package or app"
+                    exit -1
+                }
+                if {$name == ""} {
+                    debug "$type name is required"
+                    exit -1
+                }
+
+                switch $type {
+                    package {
+                        create_pkg $name
+                    }
+                    app {
+                        create_app $name
+                    }
+                }
+            }
+        }
+        default {
+
+            set cfg_cmds [get $configs commands]
+            set cmds [list]
+
+            dict for {k v} $cfg_cmds {
+
+                set label $k
+                set cmd $v
+                set forever false
+                set cmd_args {}
+
+                if {[string match *.* $k]} {
+                    set keys [split $k \.] 
+                    if {[lsearch $keys forever] > -1} {
+                        set keys [lrange $keys 0 end-1]
+                    }
+                    set label [join $keys " "]
+                }
+
+                lappend cmds [dict create label $label cmd $cmd forever $forever]
+            }            
+
+            foreach it $cmds {
+
+                set label [dict get $it label] 
+                set cmd [dict get $it cmd] 
+                set forever [dict get $it forever]
+
+                set idx [lsearch $argv --]
+                set user_cmd_label [join $argv " "]
+                set user_cmd_args {}
+
+                if {$idx > -1} {
+                    set user_cmd [lrange $argv 0 $idx-1]
+                    set user_cmd_label [join $user_cmd " "]
+                    set user_cmd_args [lrange $argv $idx+1 end]
+                }
+
+                if {$label == $user_cmd_label} {
+
+                    debug "run \{forever=$forever\}: $label -> $cmd $user_cmd_args"
+
+                    if {$forever} {
+                        run [list {*}$cmd {*}$user_cmd_args]
+                    } else {
+                        exec {*}[list {*}$cmd {*}$user_cmd_args | tee /dev/tty]
+                    }
+                    return
+                }                
+            }
+
+            set labels [lmap it $cmds {dict get $it label}]
+            puts "::> The TCL Package Manager"
+            puts ""
+            puts " Usage:"
+            puts "  init: Create $config_file_name in current folder"
+            puts "  install: Install project dependencies"
+            puts "  clean: Delete .tcl folder"
+            puts "  run: Run project"
+            puts "  test: Run project tests"
+            puts "  upgrade: Upgrade tclp"
+	    puts "  pkg list: List all packages"
+	    puts "  pkg install <github url> <pkg name>: Install package from github"
+            puts "  new package <name>: Create package"
+	    puts "  new app <name>: Create app"
+            if {[llength $labels] > 0} {
+                puts ""
+                puts "Custom commands:"
+                puts " [join $labels { | }]"
+            }
+            puts ""
+            puts " Use -- to pass extra cmd args"            
+            puts ""
+            exit 1
+        }
+    }
+}
+
+namespace eval ::templates {
+
+    set app {
+
+        main {source .tcl/deps.tcl
+    
+
+proc sum {x y} {
+    expr {$x + $y}
+}
+
+proc main {argc argv} {
+    puts "hello, tcl!"
+}
+
+main $argc $argv}
+        
+        test {package require tcltest
+
+namespace import ::tcltest::*
+
+source ../main.tcl
+
+test test-sum {} -body {            
+    sum 1 1
+} -result 2
+
+cleanupTests}
+    
+}
+
+    set lib {
+
+        pkg-index {package ifneeded __app_name__ 1.0 [list source [file join $dir lib.tcl]]}
+
+        lib {source .tcl/deps.tcl
+
+proc sum {x y} {
+    expr {$x + $y}
+}}
+
+        tests {
+            all {package require tcltest
+
+namespace import ::tcltest::*
+
+if {$argc != 0} {
+    if {[lindex $::argv 0] eq "configure"} {
+        foreach {action arg1 arg2} $::argv {
+            $action $arg1 arg2
+        }
+    } else {
+        foreach {action arg} $::argv {
+            if {[string match -* $action]} {
+                configure $action $arg
+            } else {
+                $action $arg
+            }
+        }
+    }
+}
+runAllTests}
+
+            lib {package require tcltest
+
+namespace import ::tcltest::*
+
+source ../lib.tcl
+
+test test-sum {} -body {            
+    sum 1 1
+} -result 2
+
+cleanupTests}
+
+        }
+    }
+
+    set build_file {{app:}
+{  name: __app_name__}
+{  description: __app_name__ descripiton}
+{  entrypoint: ./main.tcl}
+{  testdir: ./tests}
+
+{dependencies:}
+{  #- https://github.com/mobilemindtech/tcl-request.git}
+{  #- https://github.com/mobilemindtech/tcl-sjson.git}
+{  #- https://github.com/mobilemindtech/tcl-tools.git}
+{  #- http-tcl # import c tcl lib}
+
+{requirements:}
+{  packages: }
+{  #  - mysqltcl # check if package is installed}
+{  #  - tcllib}
+{  cmds:}
+{  #  - curl --version # check curl is installed}
+{  }
+{build:}
+{  cmds:}
+
+{# TCL c lib install}
+{#http-tcl:}
+{#  url: https://github.com/anticrisis/tcl-http.git}
+{#  cmds:}
+{#    - ./act vcpkg setup}
+{#    - ./act build manifest.txt}
+{#    - mkdir -p build/tcl/modules/act && mkdir -p build/tcl/packages }
+{#    - cp build/http-0.1.tm build/tcl/modules/act/}
+{#    - cp build/act_http/pkgIndex.tcl build/tcl/packages }
+{#  imports:}
+{#    - ::tcl::tm::path add [file normalize ./.tcl/tcl-http/build/tcl/modules]}
+{#    - lappend ::auto_path [file normalize ./.tcl/tcl-http/build/tcl/packages]}
+
+{# custom commands}
+{commands:}}
+}
+
+tclp::main $argc $argv

@@ -1,8 +1,8 @@
 #!/usr/bin/env tclsh
-
-source ./.tcl/deps.tcl
-
+source deps.tcl
 
 package require trails 0.1
 
-trails_run_app
+namespace import ::trails::*
+
+run_app

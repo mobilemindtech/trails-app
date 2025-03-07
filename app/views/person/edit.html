@@ -1,0 +1,13 @@
+{% extends "../templates/main.html" %}
+
+{% block body %}
+
+<form action="/person/update" method="put">
+  {% include form.html %}
+
+  <button class="btn btn-primart">Update</button>
+</form>
+
+
+{% endblock %}
+

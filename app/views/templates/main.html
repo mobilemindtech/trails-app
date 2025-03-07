@@ -1,16 +1,59 @@
-
-<html>
+<!doctype html>
+<html lang="en" class="h-100">
   <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>
-      {% block title %} trails app {% endblock %}
+      {% block body %}TCL :: Trails{% endblock %}
     </title>
-    <link href="/public/css/main.css">
+
+    <link rel="stylesheet" href="/public/vendor/fonts/font-awesome-4.7.0/css/font-awesome.min.css">
+    <link rel="stylesheet"  href="/public/vendor/bootstrap-5.3.3/css/bootstrap.min.css">
+    <link rel="stylesheet"  href="/public/css/main.css">
+    
+
+    <style>
+      .bd-placeholder-img {
+        font-size: 1.125rem;
+        text-anchor: middle;
+        -webkit-user-select: none;
+        -moz-user-select: none;
+        user-select: none;
+      }
+
+      @media (min-width: 768px) {
+        .bd-placeholder-img-lg {
+          font-size: 3.5rem;
+        }
+      }
+    </style>
+
+    
   </head>
-  <body>
-    <h1>Hello, trails!</h1>
+  <body class="d-flex h-100 text-center text-white bg-dark">
+    
+    <div class="cover-container d-flex w-100 h-100 p-3 mx-auto flex-column">
+      <header class="mb-auto">
+        <div>
+          <h3 class="float-md-start mb-0">trails</h3>
+          <nav class="nav nav-masthead justify-content-center float-md-end">
+            <a class="nav-link active" aria-current="page" href="#">Home</a>
+          </nav>
+        </div>
+      </header>
 
-    {% block body %}{% endblock %}
+      <main class="px-3">
+	{% block body %}{% endblock %}
+      </main>
 
-    <script src="/public/js/main.hs">
+      <footer class="mt-auto text-white-50">
+        <p>trails template</p>
+      </footer>
+    </div>
+
+
+    <script type="text/javascript"  src="/public/vendor/lib/jquery-3.7.1.min.js"></script>
+    <script type="text/javascript"  src="/public/vendor/bootstrap-5.3.3/js/bootstrap.min.js"></script>
+    <script type="text/javascript"  src="/public/js/main.js"></script>    
   </body>
 </html>

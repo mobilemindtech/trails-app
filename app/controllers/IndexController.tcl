@@ -2,7 +2,7 @@ package require TclOO
 
 namespace import ::trails::controllers::Controller
 
-namespace eval controllers  {
+namespace eval ::controllers  {
     catch {
 	oo::class create IndexController { 
 	    Controller {

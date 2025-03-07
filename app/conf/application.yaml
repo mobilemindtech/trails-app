@@ -27,7 +27,7 @@ web:
   public:
     assets:
       - ./app/assets
-    extensions: .js,.css,.png,.jpg
+    extensions: '*' # .js,.css,.png,.jpg
 
   authenticator:
     secret: d00K3R$w@@rm33!$$

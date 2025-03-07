@@ -45,6 +45,13 @@ namespace eval controllers  {
 	    my render -text "counter = $counter"
 	}
 
+	method index {req} {
+	    puts "::> index"
+	    my render \
+		-model {x 1 y 2}
+	    #-view /index \
+	}
+
 	#method index {request} {
 	#	my variable indexService
 	#	Response new -status 200 -body [$indexService foo]

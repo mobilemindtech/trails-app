@@ -5,6 +5,7 @@ namespace import ::trails::controllers::Controller
 namespace eval ::controllers {
 
     oo::class create PersonController {
+
 	Controller {
 	    scaffold true
 	}
@@ -23,6 +24,8 @@ namespace eval ::controllers {
 	# method stuff {} {
 	#  render -text "hello, world"
 	#}
+
+	method say {} {}
     }
 
     namespace export PersonController
